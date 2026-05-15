@@ -12,6 +12,9 @@ class InvoiceParseError(ValueError):
     pass
 
 
+MONEY_PATTERN = r"(?:[A-Z]{1,3}\$|[€$£])?\s*-?\(?\d[\d,]*(?:\.\d{2})?\)?"
+
+
 def parse_invoice_pdf(path: Path) -> Invoice:
     return parse_invoice_text(extract_pdf_text(path))
 
@@ -51,6 +54,7 @@ def _decimal(value: str) -> Decimal:
     cleaned = (
         value.replace("EUR", "")
         .replace("USD", "")
+        .replace("US$", "")
         .replace("$", "")
         .replace("€", "")
         .replace("£", "")
@@ -365,11 +369,33 @@ def _parse_generic_lines(lines: list[str]) -> list[InvoiceLine]:
         if lowered.startswith(("subtotal", "total excluding tax", "tax", "vat ", "sales tax", "total", "amount due", "balance due")):
             break
 
+        inline_match = re.match(
+            rf"^(?P<description>.+?)\s+"
+            r"(?P<quantity>-?\d+(?:\.\d+)?)\s+"
+            rf"(?P<unit>{MONEY_PATTERN})\s+"
+            rf"(?:(?P<tax>-?\d+(?:\.\d+)?)%\s+)?"
+            rf"(?P<amount>{MONEY_PATTERN})$",
+            line,
+        )
+        if inline_match:
+            description = " - ".join([*description_buffer, inline_match.group("description")])
+            invoice_lines.append(
+                InvoiceLine(
+                    description=description,
+                    quantity=_decimal(inline_match.group("quantity")),
+                    unit_price=_decimal(inline_match.group("unit")),
+                    vat_rate=_decimal(inline_match.group("tax") or "0"),
+                    line_total=_decimal(inline_match.group("amount")),
+                )
+            )
+            description_buffer = []
+            continue
+
         match = re.match(
             r"^(?P<quantity>-?\d+(?:\.\d+)?)\s+"
-            r"(?P<unit>[€$£]?\s*-?\(?\d[\d,]*(?:\.\d{2})?\)?)\s+"
+            rf"(?P<unit>{MONEY_PATTERN})\s+"
             r"(?:(?P<tax>-?\d+(?:\.\d+)?)%\s+)?"
-            r"(?P<amount>[€$£]?\s*-?\(?\d[\d,]*(?:\.\d{2})?\)?)$",
+            rf"(?P<amount>{MONEY_PATTERN})$",
             line,
         )
         if match and description_buffer:
@@ -437,7 +463,7 @@ def _contains_amount(line: str) -> bool:
 
 
 def _last_amount(line: str) -> str | None:
-    matches = re.findall(r"[€$£]?\s*-?\(?\d[\d,]*(?:\.\d{2})?\)?", line)
+    matches = re.findall(MONEY_PATTERN, line)
     return matches[-1] if matches else None
 
 

@@ -82,6 +82,42 @@ def test_generic_invoice_layout_with_inline_labels_and_compact_table() -> None:
     assert invoice.totals.total == Decimal("21.78")
 
 
+def test_generic_invoice_layout_with_inline_description_row_and_usd_prefix() -> None:
+    invoice = parse_invoice_text(
+        """
+        Page 1 of 1
+        Invoice
+        Invoice number NMQ6V9FT\x000001
+        Date of issue April 27, 2026
+        Date due April 27, 2026
+        MOONSHOT AI PTE. LTD.
+        91 BENCOOLEN STREET
+        api-service@moonshot.ai
+        SG GST 202326494K
+        Bill to
+        Domas
+        domisj@gmail.com
+        US$10.00 due April 27, 2026
+        Description Qty Unit price Amount
+        Account Top-up 1 US$10.00 US$10.00
+        Subtotal US$10.00
+        Total US$10.00
+        Amount due US$10.00
+        """
+    )
+
+    assert invoice.number == "NMQ6V9FT-0001"
+    assert invoice.currency == "USD"
+    assert invoice.seller.name == "MOONSHOT AI PTE. LTD."
+    assert invoice.buyer.name == "Domas"
+    assert invoice.lines[0].description == "Account Top-up"
+    assert invoice.lines[0].unit_price == 10
+    assert invoice.lines[0].vat_rate == 0
+    assert invoice.totals.subtotal == 10
+    assert invoice.totals.tax == 0
+    assert invoice.totals.total == 10
+
+
 def _node(element: ET.Element) -> tuple[str, str, list[object]]:
     return (
         element.tag,
