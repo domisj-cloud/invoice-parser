@@ -9,3 +9,15 @@ GetFile -> UpdateAttribute -> PutS3Object -> ReplaceText -> InvokeHTTP
 ```
 
 The important event-based behavior is that `InvokeHTTP` is called only after `PutS3Object` succeeds.
+
+Start the full local stack before creating or testing the flow:
+
+```bash
+./scripts/start_services.sh
+```
+
+Stop it with:
+
+```bash
+./scripts/stop_services.sh
+```

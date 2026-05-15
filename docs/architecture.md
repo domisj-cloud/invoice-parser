@@ -40,6 +40,17 @@ The input file is left in place even when parsing fails.
 - `minio`: S3-compatible object storage for the PoC
 - `parser-service`: FastAPI service that downloads PDFs from MinIO, parses them, and writes XML
 
+## Local Operations
+
+The repo includes small wrapper scripts for the Docker Compose stack:
+
+```bash
+./scripts/start_services.sh
+./scripts/stop_services.sh
+```
+
+The start script runs `docker compose up -d --build`, waits for the parser health endpoint, and prints the local URLs and credentials. The stop script runs `docker compose down` and preserves named Docker volumes, including MinIO data, parser history, and NiFi repositories.
+
 ## Parser Dashboard
 
 The parser service exposes a lightweight dashboard at:

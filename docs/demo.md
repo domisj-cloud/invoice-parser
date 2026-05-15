@@ -4,8 +4,10 @@
 
 ```bash
 cd "/Users/domas/Documents/New project"
-docker compose up --build
+./scripts/start_services.sh
 ```
+
+The script starts all Docker services in the background, rebuilds the parser image when needed, waits for the parser health endpoint, and prints the demo URLs.
 
 Open:
 
@@ -75,7 +77,7 @@ Use the exact object name shown in MinIO.
 ## Stop the Stack
 
 ```bash
-docker compose down
+./scripts/stop_services.sh
 ```
 
 This stops containers and removes the Docker network. Named volumes are preserved.

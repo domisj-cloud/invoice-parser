@@ -27,7 +27,13 @@ MinIO buckets are created automatically:
 ## Start
 
 ```bash
-docker compose up --build
+./scripts/start_services.sh
+```
+
+Stop:
+
+```bash
+./scripts/stop_services.sh
 ```
 
 Health check:

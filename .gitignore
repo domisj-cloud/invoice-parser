@@ -7,3 +7,4 @@ htmlcov/
 samples/inbox/*
 !samples/inbox/.gitkeep
 tmp/
+.DS_Store
