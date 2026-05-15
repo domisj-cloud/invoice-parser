@@ -153,6 +153,40 @@ def test_generic_receipt_with_colon_labels_and_no_line_table() -> None:
     assert invoice.totals.total == Decimal("72.60")
 
 
+def test_dynamic_generic_invoice_with_bilingual_labels_and_no_table() -> None:
+    invoice = parse_invoice_text(
+        """
+        PVM sąskaita faktūra / Invoice CSI-25-0008395
+        2025-06-09
+        Paslaugų tiekėjas / Supplier
+        Stuart Energy, UAB
+        Įmonės kodas / Code: 305556655
+        PVM kodas / EU VAT no.: LT100013523217
+        Adresas / Address: Saulėtekio al. 15, LT-10224 Vilnius
+        Paslaugų gavėjas / Customer
+        Domas J
+        Įkrovimo paslauga / Charging service
+        Suteiktų paslaugų data / Date of service 2025-06-09
+        Krovimo kiekis / Charging amount 7.366 kWh
+        Iš viso be PVM / Total excl. VAT € 1.83
+        21% PVM / 21% VAT € 0.38
+        Iš viso su PVM / Total incl. VAT € 2.21
+        """
+    )
+
+    assert invoice.number == "CSI-25-0008395"
+    assert invoice.date == "2025-06-09"
+    assert invoice.currency == "EUR"
+    assert invoice.seller.name == "Stuart Energy, UAB"
+    assert invoice.buyer.name == "Domas J"
+    assert invoice.lines[0].description == "Charging service"
+    assert invoice.lines[0].vat_rate == 21
+    assert invoice.lines[0].line_total == Decimal("1.83")
+    assert invoice.totals.subtotal == Decimal("1.83")
+    assert invoice.totals.tax == Decimal("0.38")
+    assert invoice.totals.total == Decimal("2.21")
+
+
 def _node(element: ET.Element) -> tuple[str, str, list[object]]:
     return (
         element.tag,

@@ -63,7 +63,7 @@ The dashboard and `/api/jobs` expose:
 
 ## Parser Scope
 
-The PoC parser is rule-based and supports the provided mock invoice families plus a generic invoice fallback:
+The parser uses known sample parsers first, then falls back to dynamic best-effort extraction for any readable PDF text with monetary amounts:
 
 - EU VAT invoice
 - US invoice
@@ -71,5 +71,6 @@ The PoC parser is rule-based and supports the provided mock invoice families plu
 - credit note with negative amounts
 - generic invoices with inline labels such as `Invoice number`, `Date of issue`, `Bill to`, and compact `Description Qty Unit price Tax Amount` tables
 - generic receipts/tax invoices with colon labels such as receipt number, company/candidate name, item amount, promotion, tax, and transaction amount
+- fallback extraction for title-based invoice numbers, bilingual labels, supplier/customer sections, subtotal/tax/total labels, and one synthesized line item when a table cannot be identified
 
 For production usage, the parser should add supplier-specific templates, OCR fallback for scanned PDFs, confidence scoring, and richer error classification.

@@ -214,7 +214,7 @@ INVOICE_SAMPLE_DIR=/path/to/invoice_pdf_examples pytest -q
 
 ## Current Parser Coverage
 
-This PoC parser is intentionally rule-based and supports the supplied mock invoice families:
+This PoC parser now uses known sample parsers first, then falls back to dynamic best-effort extraction for any readable PDF text with monetary amounts.
 
 - EU VAT invoice
 - US invoice
@@ -222,5 +222,6 @@ This PoC parser is intentionally rule-based and supports the supplied mock invoi
 - credit note with negative amounts
 - generic invoices with inline labels such as `Invoice number`, `Date of issue`, `Bill to`, and compact `Description Qty Unit price Tax Amount` tables
 - generic receipts/tax invoices with colon labels such as receipt number, company/candidate name, item amount, promotion, tax, and transaction amount
+- fallback extraction for title-based invoice numbers, bilingual labels, supplier/customer sections, subtotal/tax/total labels, and one synthesized line item when a table cannot be identified
 
 For broader production usage, the next step is to add supplier-specific layouts, OCR fallback for scanned PDFs, and confidence/error reporting.
