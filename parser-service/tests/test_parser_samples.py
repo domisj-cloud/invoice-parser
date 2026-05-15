@@ -187,6 +187,65 @@ def test_dynamic_generic_invoice_with_bilingual_labels_and_no_table() -> None:
     assert invoice.totals.total == Decimal("2.21")
 
 
+def test_dynamic_generic_invoice_with_stacked_table_and_separate_labels() -> None:
+    invoice = parse_invoice_text(
+        """
+        INVOICE
+        # 31061
+        SuperStore
+        Bill To
+        :
+        Yoseph Carroll
+        Ship To
+        :
+        Manukau City,
+        Auckland, New
+        Zealand
+        Nov 30 2012
+        Standard Class
+        $2,921.43
+        Date
+        :
+        Ship Mode
+        :
+        Balance Due
+        :
+        Item
+        Quantity
+        Rate
+        Amount
+        Bevis Computer Table, Adjustable Height
+        4
+        $1,181.02
+        $4,724.06
+        Tables, Furniture, FUR-TA-3417
+        $4,724.06
+        $1,889.62
+        $86.99
+        $2,921.43
+        Subtotal
+        :
+        Discount (40%)
+        :
+        Shipping
+        :
+        Total
+        :
+        """
+    )
+
+    assert invoice.number == "31061"
+    assert invoice.date == "Nov 30 2012"
+    assert invoice.currency == "USD"
+    assert invoice.seller.name == "SuperStore"
+    assert invoice.buyer.name == "Yoseph Carroll"
+    assert invoice.lines[0].description == "Bevis Computer Table, Adjustable Height"
+    assert invoice.lines[0].quantity == 4
+    assert invoice.lines[0].unit_price == Decimal("1181.02")
+    assert invoice.lines[0].line_total == Decimal("4724.06")
+    assert invoice.totals.total == Decimal("2921.43")
+
+
 def _node(element: ET.Element) -> tuple[str, str, list[object]]:
     return (
         element.tag,

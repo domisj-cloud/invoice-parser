@@ -223,5 +223,6 @@ This PoC parser now uses known sample parsers first, then falls back to dynamic 
 - generic invoices with inline labels such as `Invoice number`, `Date of issue`, `Bill to`, and compact `Description Qty Unit price Tax Amount` tables
 - generic receipts/tax invoices with colon labels such as receipt number, company/candidate name, item amount, promotion, tax, and transaction amount
 - fallback extraction for title-based invoice numbers, bilingual labels, supplier/customer sections, subtotal/tax/total labels, and one synthesized line item when a table cannot be identified
+- stacked tables where PDF text extraction emits item, quantity, rate, and amount as separate vertical lines
 
 For broader production usage, the next step is to add supplier-specific layouts, OCR fallback for scanned PDFs, and confidence/error reporting.

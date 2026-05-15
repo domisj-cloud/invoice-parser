@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from app.models import Invoice, InvoiceLine, Party, Totals
@@ -16,6 +16,7 @@ MONEY_PATTERN = (
     r"(?<![A-Za-z0-9])"
     r"(?:[A-Z]{1,3}\$|[€$£])?\s*-?\(?\d[\d,]*(?:\.\d{1,4})?\)?"
     r"(?:\s*(?:EUR|USD|GBP))?"
+    r"(?!\s*%)"
     r"(?![A-Za-z0-9])"
 )
 
@@ -54,20 +55,25 @@ def _normalize_line(line: str) -> str:
 
 
 def _decimal(value: str) -> Decimal:
-    cleaned = (
-        value.replace("EUR", "")
-        .replace("USD", "")
-        .replace("US$", "")
+    cleaned = re.sub(
+        r"\b(?:EUR|USD|GBP)\b",
+        "",
+        value.replace("US$", "")
         .replace("$", "")
         .replace("€", "")
-        .replace("£", "")
-        .replace("%", "")
-        .replace(",", "")
-        .strip()
+        .replace("£", ""),
+        flags=re.IGNORECASE,
     )
+    match = re.search(r"-?\(?\d[\d,]*(?:\.\d+)?\)?", cleaned)
+    if not match:
+        raise InvoiceParseError(f"Could not parse decimal value {value!r}")
+    cleaned = match.group(0).replace(",", "").strip()
     if cleaned.startswith("(") and cleaned.endswith(")"):
         cleaned = f"-{cleaned[1:-1]}"
-    return Decimal(cleaned)
+    try:
+        return Decimal(cleaned)
+    except InvalidOperation as exc:
+        raise InvoiceParseError(f"Could not parse decimal value {value!r}") from exc
 
 
 def _after(lines: list[str], label: str) -> str:
@@ -261,7 +267,7 @@ def _parse_generic_invoice(lines: list[str]) -> Invoice:
         ),
         default="",
     )
-    total = _find_generic_total(lines, TOTAL_LABELS, allow_fallback=True)
+    total = _find_generic_total(lines, TOTAL_LABELS, allow_nearby=True, allow_fallback=True)
     tax = _find_generic_tax(lines, total)
     subtotal = _find_generic_subtotal(lines, total, tax)
     tax_rate = _find_generic_tax_rate(lines)
@@ -288,7 +294,9 @@ def _find_inline_value(
     for label in labels:
         for index, line in enumerate(lines):
             if line.casefold() == label.casefold() and index + 1 < len(lines):
-                return lines[index + 1]
+                value = lines[index + 1]
+                if value and not _is_separator(value):
+                    return value
             if line.casefold().startswith(label.casefold()):
                 value = line[len(label) :].strip(" :-#")
                 if value:
@@ -357,6 +365,10 @@ def _parse_generic_lines(
     subtotal: Decimal,
     tax_rate: Decimal,
 ) -> list[InvoiceLine]:
+    invoice_lines = _parse_stacked_table_lines(lines)
+    if invoice_lines:
+        return invoice_lines
+
     invoice_lines: list[InvoiceLine] = []
     description_buffer: list[str] = []
     in_table = False
@@ -433,6 +445,59 @@ def _parse_generic_lines(
     return invoice_lines
 
 
+def _parse_stacked_table_lines(lines: list[str]) -> list[InvoiceLine]:
+    try:
+        start = _find_stacked_table_start(lines)
+    except StopIteration:
+        return []
+
+    stop_tokens = ("subtotal", "discount", "shipping", "tax", "total", "notes", "terms")
+    invoice_lines: list[InvoiceLine] = []
+    index = start
+    while index < len(lines):
+        line = lines[index]
+        lowered = line.casefold()
+        if any(lowered.startswith(token) for token in stop_tokens):
+            break
+        if _contains_amount(line):
+            index += 1
+            continue
+
+        description_parts = [line]
+        quantity_index = index + 1
+        while quantity_index < len(lines) and not _is_quantity_line(lines[quantity_index]):
+            candidate = lines[quantity_index]
+            if any(candidate.casefold().startswith(token) for token in stop_tokens):
+                break
+            if _contains_amount(candidate):
+                break
+            description_parts.append(candidate)
+            quantity_index += 1
+
+        if quantity_index + 2 >= len(lines) or not _is_quantity_line(lines[quantity_index]):
+            index += 1
+            continue
+
+        unit_price = _last_decimal(lines[quantity_index + 1])
+        line_total = _last_decimal(lines[quantity_index + 2])
+        if unit_price is None or line_total is None:
+            index += 1
+            continue
+
+        invoice_lines.append(
+            InvoiceLine(
+                description=" - ".join(description_parts),
+                quantity=_decimal(lines[quantity_index]),
+                unit_price=unit_price,
+                vat_rate=Decimal("0"),
+                line_total=line_total,
+            )
+        )
+        index = quantity_index + 3
+
+    return invoice_lines
+
+
 def _parse_labeled_amount_lines(lines: list[str]) -> list[InvoiceLine]:
     invoice_lines: list[InvoiceLine] = []
     exam_name = _find_inline_value(lines, ("Exam Name",), default="")
@@ -460,6 +525,19 @@ def _parse_labeled_amount_lines(lines: list[str]) -> list[InvoiceLine]:
             )
         )
     return invoice_lines
+
+
+def _find_stacked_table_start(lines: list[str]) -> int:
+    for index, line in enumerate(lines):
+        lowered = line.casefold()
+        if all(token in lowered for token in ("item", "quantity", "amount")):
+            return index + 1
+        if all(token in lowered for token in ("description", "quantity", "amount")):
+            return index + 1
+        header = [candidate.casefold() for candidate in lines[index : index + 4]]
+        if len(header) == 4 and header[0] in {"item", "description"} and "quantity" in header[1] and "amount" in header[3]:
+            return index + 4
+    raise StopIteration
 
 
 TOTAL_LABELS = (
@@ -492,17 +570,21 @@ def _find_generic_total(
     lines: list[str],
     labels: tuple[str, ...],
     *,
+    allow_nearby: bool = False,
     allow_fallback: bool = False,
 ) -> Decimal:
     for label in labels:
-        for line in reversed(lines):
+        for index, line in reversed(list(enumerate(lines))):
             if _line_has_label(line, label):
-                amount = _last_amount(line)
+                amount = _last_decimal(line)
                 if amount is not None:
-                    return _decimal(amount)
+                    return amount
+                nearby = _nearest_previous_decimal(lines, index) if allow_nearby else None
+                if nearby is not None:
+                    return nearby
 
     if allow_fallback:
-        amounts = [_decimal(amount) for line in lines for amount in re.findall(MONEY_PATTERN, line)]
+        amounts = [amount for line in lines for amount in _decimal_values(line)]
         if amounts:
             return amounts[-1]
     raise InvoiceParseError("No monetary amounts found")
@@ -541,9 +623,9 @@ def _find_generic_tax(lines: list[str], total: Decimal) -> Decimal:
             any(token in lowered for token in ("vat", "pvm", "sales tax", "tax"))
             and not any(token in lowered for token in ("total incl", "including", "amount due"))
         ):
-            amount = _last_amount(line)
+            amount = _last_decimal(line)
             if amount is not None:
-                return _decimal(amount)
+                return amount
     return Decimal("0")
 
 
@@ -561,9 +643,9 @@ def _find_inline_amount(lines: list[str], labels: tuple[str, ...]) -> Decimal | 
     for label in labels:
         for line in lines:
             if _line_has_label(line, label):
-                amount = _last_amount(line)
+                amount = _last_decimal(line)
                 if amount is not None:
-                    return _decimal(amount)
+                    return amount
     return None
 
 
@@ -588,6 +670,14 @@ def _find_document_number(lines: list[str]) -> str:
     transaction_id = _find_inline_value(lines, ("Transaction Confirmation #",), default="")
     if transaction_id:
         return transaction_id
+
+    for index, line in enumerate(lines[:20]):
+        if line.casefold() in {"invoice", "receipt"} and index + 1 < len(lines):
+            number = lines[index + 1].strip(" #:.")
+            if re.search(r"\d", number):
+                return number
+        if line.startswith("#") and re.search(r"\d", line):
+            return line.strip(" #:.")
 
     for line in lines[:20]:
         match = re.search(r"(?:invoice|receipt|faktūra|faktura)\s*(?:#|no\.?|number|:)?\s*([A-Z0-9][A-Z0-9_.-]*\d[A-Z0-9_.-]*)", line, re.IGNORECASE)
@@ -624,6 +714,9 @@ def _find_document_date(lines: list[str]) -> str:
         match = re.search(r"\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b", line)
         if match:
             return match.group(0)
+        match = re.search(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b", line, re.IGNORECASE)
+        if match:
+            return match.group(0)
     return ""
 
 
@@ -635,7 +728,7 @@ def _find_section_value(lines: list[str], labels: tuple[str, ...]) -> str:
                 if value and not _looks_like_label_only(value):
                     return value
                 for candidate in lines[index + 1 : index + 5]:
-                    if candidate and not _looks_like_metadata(candidate):
+                    if candidate and not _is_separator(candidate) and not _looks_like_metadata(candidate):
                         return candidate
     return ""
 
@@ -670,6 +763,10 @@ def _english_side(line: str) -> str:
 
 def _looks_like_label_only(value: str) -> bool:
     return not value or value.casefold() in {"supplier", "seller", "customer", "buyer", "client"}
+
+
+def _is_separator(value: str) -> bool:
+    return not value.strip(" :#-/")
 
 
 def _looks_like_metadata(line: str) -> bool:
@@ -717,12 +814,39 @@ def _find_index_casefold(lines: list[str], labels: tuple[str, ...]) -> int | Non
 
 
 def _contains_amount(line: str) -> bool:
-    return _last_amount(line) is not None
+    return _last_decimal(line) is not None
 
 
 def _last_amount(line: str) -> str | None:
     matches = re.findall(MONEY_PATTERN, line)
     return matches[-1] if matches else None
+
+
+def _last_decimal(line: str) -> Decimal | None:
+    values = _decimal_values(line)
+    return values[-1] if values else None
+
+
+def _decimal_values(line: str) -> list[Decimal]:
+    values: list[Decimal] = []
+    for amount in re.findall(MONEY_PATTERN, line):
+        try:
+            values.append(_decimal(amount))
+        except InvoiceParseError:
+            continue
+    return values
+
+
+def _nearest_previous_decimal(lines: list[str], index: int) -> Decimal | None:
+    for candidate in reversed(lines[max(0, index - 8) : index]):
+        amount = _last_decimal(candidate)
+        if amount is not None:
+            return amount
+    return None
+
+
+def _is_quantity_line(line: str) -> bool:
+    return re.fullmatch(r"\d+(?:\.\d+)?", line.strip()) is not None
 
 
 def _parse_table_lines(
