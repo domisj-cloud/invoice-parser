@@ -118,6 +118,41 @@ def test_generic_invoice_layout_with_inline_description_row_and_usd_prefix() -> 
     assert invoice.totals.total == 10
 
 
+def test_generic_receipt_with_colon_labels_and_no_line_table() -> None:
+    invoice = parse_invoice_text(
+        """
+        Official Receipt / Tax Invoice #: 12043017
+        Prepared on Behalf of your Test Sponsor: Google Cloud
+        Date: 07 March 2023 VAT #: LT100005242513
+        Company Name: Skandinaviska Enskilda Banken AB
+        Candidate Name: Domas Jautakis
+        Exam Name: Google Cloud Certified - Professional Cloud Architect (English)
+        Scheduled Date: 28 April 2023 1000H Europe/Vilnius
+        Transaction Date: 06 March 2023
+        Exam Price: 120.00 USD
+        Promotion Amount: -60.00 USD
+        Tax: 12.60 USD
+        Transaction Amount: 72.60 USD
+        Transaction Confirmation #: 5ad7aa9ebb82063da5e8d223a5eca497
+        """
+    )
+
+    assert invoice.document_type == "receipt"
+    assert invoice.number == "12043017"
+    assert invoice.date == "06 March 2023"
+    assert invoice.due_date == "28 April 2023 1000H Europe/Vilnius"
+    assert invoice.currency == "USD"
+    assert invoice.seller.name == "Google Cloud"
+    assert invoice.buyer.name == "Skandinaviska Enskilda Banken AB"
+    assert invoice.lines[0].description == "Google Cloud Certified - Professional Cloud Architect (English)"
+    assert invoice.lines[0].line_total == 120
+    assert invoice.lines[1].description == "Promotion Amount"
+    assert invoice.lines[1].line_total == -60
+    assert invoice.totals.subtotal == 60
+    assert invoice.totals.tax == Decimal("12.60")
+    assert invoice.totals.total == Decimal("72.60")
+
+
 def _node(element: ET.Element) -> tuple[str, str, list[object]]:
     return (
         element.tag,

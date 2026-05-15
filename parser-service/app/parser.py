@@ -31,7 +31,7 @@ def parse_invoice_text(text: str) -> Invoice:
         return _parse_modern_eu_invoice(lines)
     if "North Star Office Supplies" in joined:
         return _parse_us_invoice(lines)
-    if _looks_like_generic_invoice(lines):
+    if _looks_like_generic_document(lines):
         return _parse_generic_invoice(lines)
 
     raise InvoiceParseError("Unsupported invoice layout")
@@ -243,34 +243,43 @@ def _parse_us_invoice(lines: list[str]) -> Invoice:
     )
 
 
-def _looks_like_generic_invoice(lines: list[str]) -> bool:
+def _looks_like_generic_document(lines: list[str]) -> bool:
     joined = "\n".join(lines).lower()
-    return "invoice" in joined and any(
+    return any(token in joined for token in ("invoice", "receipt")) and any(
         token in joined
         for token in (
             "invoice number",
             "invoice no",
             "invoice #",
+            "receipt #",
+            "tax invoice #",
             "amount due",
             "balance due",
+            "transaction amount",
         )
     )
 
 
 def _parse_generic_invoice(lines: list[str]) -> Invoice:
+    document_type = "receipt" if any("receipt" in line.casefold() for line in lines[:5]) else "invoice"
     number = _find_inline_value(
         lines,
         (
+            "Official Receipt / Tax Invoice #",
+            "Receipt #",
+            "Receipt number",
             "Invoice number",
             "Invoice no.",
             "Invoice no",
             "Invoice #",
             "Invoice ID",
         ),
+        default=_find_inline_value(lines, ("Transaction Confirmation #",), default="unknown"),
     )
     date = _find_inline_value(
         lines,
         (
+            "Transaction Date",
             "Date of issue",
             "Invoice date",
             "Date issued",
@@ -284,23 +293,27 @@ def _parse_generic_invoice(lines: list[str]) -> Invoice:
             "Date due",
             "Due date",
             "Payment due",
+            "Scheduled Date",
             "Due",
         ),
         default="",
     )
-    subtotal = _find_generic_total(lines, ("Subtotal", "Total excluding tax", "Net amount"))
-    total = _find_generic_total(lines, ("Amount due", "Balance due", "Total due", "Total"))
-    tax = _find_generic_tax(lines, subtotal, total)
+    total = _find_generic_total(
+        lines,
+        ("Amount due", "Balance due", "Total due", "Transaction Amount", "Amount paid", "Total"),
+    )
+    tax = _find_generic_tax(lines, total)
+    subtotal = _find_generic_subtotal(lines, total, tax)
 
     return Invoice(
-        type="invoice",
+        type=document_type,
         number=number,
         date=date,
         due_date=due_date,
         currency=_infer_currency(lines),
         seller=_generic_seller(lines),
         buyer=_generic_buyer(lines),
-        lines=_parse_generic_lines(lines),
+        lines=_parse_generic_lines(lines, subtotal),
         totals=Totals(subtotal=subtotal, tax=tax, total=total),
     )
 
@@ -325,10 +338,20 @@ def _find_inline_value(
 
 
 def _generic_seller(lines: list[str]) -> Party:
+    sponsor = _find_inline_value(
+        lines,
+        ("Prepared on Behalf of your Test Sponsor",),
+        default="",
+    )
+    if sponsor:
+        return Party(name=sponsor)
+
     bill_to_index = _find_index_casefold(lines, ("Bill to", "Billed to", "Customer"))
     search_end = bill_to_index if bill_to_index is not None else min(len(lines), 12)
     metadata_prefixes = (
         "invoice",
+        "official receipt",
+        "receipt",
         "date",
         "due",
         "amount",
@@ -347,13 +370,20 @@ def _generic_seller(lines: list[str]) -> Party:
 
 
 def _generic_buyer(lines: list[str]) -> Party:
+    company = _find_inline_value(lines, ("Company Name",), default="")
+    if company:
+        return Party(name=company)
+    candidate = _find_inline_value(lines, ("Candidate Name",), default="")
+    if candidate:
+        return Party(name=candidate)
+
     bill_to_index = _find_index_casefold(lines, ("Bill to", "Billed to", "Customer"))
     if bill_to_index is not None and bill_to_index + 1 < len(lines):
         return Party(name=lines[bill_to_index + 1])
     return Party(name="")
 
 
-def _parse_generic_lines(lines: list[str]) -> list[InvoiceLine]:
+def _parse_generic_lines(lines: list[str], subtotal: Decimal) -> list[InvoiceLine]:
     invoice_lines: list[InvoiceLine] = []
     description_buffer: list[str] = []
     in_table = False
@@ -415,7 +445,46 @@ def _parse_generic_lines(lines: list[str]) -> list[InvoiceLine]:
             description_buffer.append(line)
 
     if not invoice_lines:
-        raise InvoiceParseError("No generic invoice lines found")
+        invoice_lines = _parse_labeled_amount_lines(lines)
+    if not invoice_lines:
+        invoice_lines = [
+            InvoiceLine(
+                description="Unclassified charges",
+                quantity=Decimal("1"),
+                unit_price=subtotal,
+                vat_rate=Decimal("0"),
+                line_total=subtotal,
+            )
+        ]
+    return invoice_lines
+
+
+def _parse_labeled_amount_lines(lines: list[str]) -> list[InvoiceLine]:
+    invoice_lines: list[InvoiceLine] = []
+    exam_name = _find_inline_value(lines, ("Exam Name",), default="")
+    exam_price = _find_inline_amount(lines, ("Exam Price",))
+    if exam_price is not None:
+        invoice_lines.append(
+            InvoiceLine(
+                description=exam_name or "Exam Price",
+                quantity=Decimal("1"),
+                unit_price=exam_price,
+                vat_rate=Decimal("0"),
+                line_total=exam_price,
+            )
+        )
+
+    promotion_amount = _find_inline_amount(lines, ("Promotion Amount", "Discount", "Adjustment"))
+    if promotion_amount is not None:
+        invoice_lines.append(
+            InvoiceLine(
+                description="Promotion Amount" if promotion_amount < 0 else "Adjustment",
+                quantity=Decimal("1"),
+                unit_price=promotion_amount,
+                vat_rate=Decimal("0"),
+                line_total=promotion_amount,
+            )
+        )
     return invoice_lines
 
 
@@ -429,14 +498,53 @@ def _find_generic_total(lines: list[str], labels: tuple[str, ...]) -> Decimal:
     raise InvoiceParseError(f"Missing total for {labels[0]!r}")
 
 
-def _find_generic_tax(lines: list[str], subtotal: Decimal, total: Decimal) -> Decimal:
+def _find_generic_subtotal(lines: list[str], total: Decimal, tax: Decimal) -> Decimal:
+    explicit = _find_optional_generic_total(
+        lines,
+        ("Subtotal", "Total excluding tax", "Net amount"),
+    )
+    if explicit is not None:
+        return explicit
+
+    item_amounts = [
+        amount
+        for amount in (
+            _find_inline_amount(lines, ("Exam Price",)),
+            _find_inline_amount(lines, ("Promotion Amount", "Discount", "Adjustment")),
+        )
+        if amount is not None
+    ]
+    if item_amounts:
+        return sum(item_amounts, Decimal("0"))
+
+    return total - tax
+
+
+def _find_optional_generic_total(lines: list[str], labels: tuple[str, ...]) -> Decimal | None:
+    try:
+        return _find_generic_total(lines, labels)
+    except InvoiceParseError:
+        return None
+
+
+def _find_generic_tax(lines: list[str], total: Decimal) -> Decimal:
     for line in reversed(lines):
         lowered = line.casefold()
         if lowered.startswith(("vat", "sales tax", "tax")) and "amount" not in lowered:
             amount = _last_amount(line)
             if amount is not None:
                 return _decimal(amount)
-    return total - subtotal
+    return Decimal("0")
+
+
+def _find_inline_amount(lines: list[str], labels: tuple[str, ...]) -> Decimal | None:
+    for label in labels:
+        for line in lines:
+            if line.casefold().startswith(label.casefold()):
+                amount = _last_amount(line)
+                if amount is not None:
+                    return _decimal(amount)
+    return None
 
 
 def _infer_currency(lines: list[str]) -> str:

@@ -221,5 +221,6 @@ This PoC parser is intentionally rule-based and supports the supplied mock invoi
 - multipage invoice with many line items
 - credit note with negative amounts
 - generic invoices with inline labels such as `Invoice number`, `Date of issue`, `Bill to`, and compact `Description Qty Unit price Tax Amount` tables
+- generic receipts/tax invoices with colon labels such as receipt number, company/candidate name, item amount, promotion, tax, and transaction amount
 
 For broader production usage, the next step is to add supplier-specific layouts, OCR fallback for scanned PDFs, and confidence/error reporting.
