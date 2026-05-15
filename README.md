@@ -214,11 +214,12 @@ INVOICE_SAMPLE_DIR=/path/to/invoice_pdf_examples pytest -q
 
 ## Current Parser Coverage
 
-This PoC parser is intentionally rule-based and targeted at the supplied mock invoice families:
+This PoC parser is intentionally rule-based and supports the supplied mock invoice families:
 
 - EU VAT invoice
 - US invoice
 - multipage invoice with many line items
 - credit note with negative amounts
+- generic invoices with inline labels such as `Invoice number`, `Date of issue`, `Bill to`, and compact `Description Qty Unit price Tax Amount` tables
 
-For real supplier invoices, the next step is to add supplier-specific layouts, OCR fallback for scanned PDFs, and confidence/error reporting.
+For broader production usage, the next step is to add supplier-specific layouts, OCR fallback for scanned PDFs, and confidence/error reporting.

@@ -28,6 +28,8 @@ def parse_invoice_text(text: str) -> Invoice:
         return _parse_modern_eu_invoice(lines)
     if "North Star Office Supplies" in joined:
         return _parse_us_invoice(lines)
+    if _looks_like_generic_invoice(lines):
+        return _parse_generic_invoice(lines)
 
     raise InvoiceParseError("Unsupported invoice layout")
 
@@ -35,10 +37,14 @@ def parse_invoice_text(text: str) -> Invoice:
 def _clean_lines(text: str) -> list[str]:
     ignored_prefixes = ("--- page ", "Synthetic test invoice", "Page ")
     return [
-        line.strip()
+        _normalize_line(line)
         for line in text.splitlines()
-        if line.strip() and not line.strip().startswith(ignored_prefixes)
+        if _normalize_line(line) and not _normalize_line(line).startswith(ignored_prefixes)
     ]
+
+
+def _normalize_line(line: str) -> str:
+    return re.sub(r"\s+", " ", line.replace("\x00", "-").replace("\xa0", " ")).strip()
 
 
 def _decimal(value: str) -> Decimal:
@@ -46,10 +52,14 @@ def _decimal(value: str) -> Decimal:
         value.replace("EUR", "")
         .replace("USD", "")
         .replace("$", "")
+        .replace("€", "")
+        .replace("£", "")
         .replace("%", "")
         .replace(",", "")
         .strip()
     )
+    if cleaned.startswith("(") and cleaned.endswith(")"):
+        cleaned = f"-{cleaned[1:-1]}"
     return Decimal(cleaned)
 
 
@@ -227,6 +237,208 @@ def _parse_us_invoice(lines: list[str]) -> Invoice:
             total=_find_label_amount(lines, "Balance due"),
         ),
     )
+
+
+def _looks_like_generic_invoice(lines: list[str]) -> bool:
+    joined = "\n".join(lines).lower()
+    return "invoice" in joined and any(
+        token in joined
+        for token in (
+            "invoice number",
+            "invoice no",
+            "invoice #",
+            "amount due",
+            "balance due",
+        )
+    )
+
+
+def _parse_generic_invoice(lines: list[str]) -> Invoice:
+    number = _find_inline_value(
+        lines,
+        (
+            "Invoice number",
+            "Invoice no.",
+            "Invoice no",
+            "Invoice #",
+            "Invoice ID",
+        ),
+    )
+    date = _find_inline_value(
+        lines,
+        (
+            "Date of issue",
+            "Invoice date",
+            "Date issued",
+            "Date",
+        ),
+        default="",
+    )
+    due_date = _find_inline_value(
+        lines,
+        (
+            "Date due",
+            "Due date",
+            "Payment due",
+            "Due",
+        ),
+        default="",
+    )
+    subtotal = _find_generic_total(lines, ("Subtotal", "Total excluding tax", "Net amount"))
+    total = _find_generic_total(lines, ("Amount due", "Balance due", "Total due", "Total"))
+    tax = _find_generic_tax(lines, subtotal, total)
+
+    return Invoice(
+        type="invoice",
+        number=number,
+        date=date,
+        due_date=due_date,
+        currency=_infer_currency(lines),
+        seller=_generic_seller(lines),
+        buyer=_generic_buyer(lines),
+        lines=_parse_generic_lines(lines),
+        totals=Totals(subtotal=subtotal, tax=tax, total=total),
+    )
+
+
+def _find_inline_value(
+    lines: list[str],
+    labels: tuple[str, ...],
+    *,
+    default: str | None = None,
+) -> str:
+    for label in labels:
+        for index, line in enumerate(lines):
+            if line.casefold() == label.casefold() and index + 1 < len(lines):
+                return lines[index + 1]
+            if line.casefold().startswith(label.casefold()):
+                value = line[len(label) :].strip(" :-#")
+                if value:
+                    return value
+    if default is not None:
+        return default
+    raise InvoiceParseError(f"Missing invoice value for {labels[0]!r}")
+
+
+def _generic_seller(lines: list[str]) -> Party:
+    bill_to_index = _find_index_casefold(lines, ("Bill to", "Billed to", "Customer"))
+    search_end = bill_to_index if bill_to_index is not None else min(len(lines), 12)
+    metadata_prefixes = (
+        "invoice",
+        "date",
+        "due",
+        "amount",
+        "pay ",
+        "page ",
+    )
+    for line in lines[:search_end]:
+        if line.casefold() == "invoice":
+            continue
+        if any(line.casefold().startswith(prefix) for prefix in metadata_prefixes):
+            continue
+        if _contains_amount(line) or "@" in line:
+            continue
+        return Party(name=line)
+    return Party(name="")
+
+
+def _generic_buyer(lines: list[str]) -> Party:
+    bill_to_index = _find_index_casefold(lines, ("Bill to", "Billed to", "Customer"))
+    if bill_to_index is not None and bill_to_index + 1 < len(lines):
+        return Party(name=lines[bill_to_index + 1])
+    return Party(name="")
+
+
+def _parse_generic_lines(lines: list[str]) -> list[InvoiceLine]:
+    invoice_lines: list[InvoiceLine] = []
+    description_buffer: list[str] = []
+    in_table = False
+
+    for line in lines:
+        lowered = line.casefold()
+        if "description" in lowered and "amount" in lowered:
+            in_table = True
+            description_buffer = []
+            continue
+        if not in_table:
+            continue
+        if lowered.startswith(("subtotal", "total excluding tax", "tax", "vat ", "sales tax", "total", "amount due", "balance due")):
+            break
+
+        match = re.match(
+            r"^(?P<quantity>-?\d+(?:\.\d+)?)\s+"
+            r"(?P<unit>[€$£]?\s*-?\(?\d[\d,]*(?:\.\d{2})?\)?)\s+"
+            r"(?:(?P<tax>-?\d+(?:\.\d+)?)%\s+)?"
+            r"(?P<amount>[€$£]?\s*-?\(?\d[\d,]*(?:\.\d{2})?\)?)$",
+            line,
+        )
+        if match and description_buffer:
+            invoice_lines.append(
+                InvoiceLine(
+                    description=" - ".join(description_buffer),
+                    quantity=_decimal(match.group("quantity")),
+                    unit_price=_decimal(match.group("unit")),
+                    vat_rate=_decimal(match.group("tax") or "0"),
+                    line_total=_decimal(match.group("amount")),
+                )
+            )
+            description_buffer = []
+            continue
+
+        if not match:
+            description_buffer.append(line)
+
+    if not invoice_lines:
+        raise InvoiceParseError("No generic invoice lines found")
+    return invoice_lines
+
+
+def _find_generic_total(lines: list[str], labels: tuple[str, ...]) -> Decimal:
+    for label in labels:
+        for line in reversed(lines):
+            if line.casefold().startswith(label.casefold()):
+                amount = _last_amount(line)
+                if amount is not None:
+                    return _decimal(amount)
+    raise InvoiceParseError(f"Missing total for {labels[0]!r}")
+
+
+def _find_generic_tax(lines: list[str], subtotal: Decimal, total: Decimal) -> Decimal:
+    for line in reversed(lines):
+        lowered = line.casefold()
+        if lowered.startswith(("vat", "sales tax", "tax")) and "amount" not in lowered:
+            amount = _last_amount(line)
+            if amount is not None:
+                return _decimal(amount)
+    return total - subtotal
+
+
+def _infer_currency(lines: list[str]) -> str:
+    joined = "\n".join(lines)
+    if "€" in joined or "EUR" in joined:
+        return "EUR"
+    if "$" in joined or "USD" in joined:
+        return "USD"
+    if "£" in joined or "GBP" in joined:
+        return "GBP"
+    return ""
+
+
+def _find_index_casefold(lines: list[str], labels: tuple[str, ...]) -> int | None:
+    label_set = {label.casefold() for label in labels}
+    for index, line in enumerate(lines):
+        if line.casefold() in label_set:
+            return index
+    return None
+
+
+def _contains_amount(line: str) -> bool:
+    return _last_amount(line) is not None
+
+
+def _last_amount(line: str) -> str | None:
+    matches = re.findall(r"[€$£]?\s*-?\(?\d[\d,]*(?:\.\d{2})?\)?", line)
+    return matches[-1] if matches else None
 
 
 def _parse_table_lines(
