@@ -8,10 +8,14 @@ class Settings(BaseSettings):
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
     minio_secure: bool = False
+    minio_region: str = "us-east-1"
+    minio_public_endpoint: str = "localhost:9000"
+    minio_public_secure: bool = False
     input_bucket: str = "inv-input"
     output_bucket: str = "inv-output"
     error_bucket: str = "inv-error"
     work_dir: str = "/tmp/invoice-parser"
+    database_path: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

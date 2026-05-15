@@ -14,7 +14,8 @@ The mailbox part is intentionally skipped for this PoC. NiFi can ingest mock PDF
 | --- | --- | --- |
 | MinIO API | http://localhost:9000 | S3-compatible API |
 | MinIO Console | http://localhost:9001 | Login `minioadmin` / `minioadmin` |
-| Parser service | http://localhost:8000 | FastAPI service |
+| Parser dashboard | http://localhost:8000 | Processing history, status, object links, and error logs |
+| Parser API | http://localhost:8000/health | FastAPI health endpoint |
 | NiFi | http://localhost:18080/nifi | Login `admin` / `adminadminadmin`; proxied to NiFi's internal HTTPS |
 
 MinIO buckets are created automatically:
@@ -34,6 +35,14 @@ Health check:
 ```bash
 curl http://localhost:8000/health
 ```
+
+Parser dashboard:
+
+```text
+http://localhost:8000
+```
+
+The dashboard shows processed files, start time, processing duration, parsing status, output XML links, error artifact links, and error logs.
 
 More detailed operational docs:
 
@@ -79,6 +88,14 @@ Failure behavior:
 - If the parser can download the PDF but cannot parse/process it, it copies the PDF to `inv-error/failed/...`.
 - The parser also writes an `*.error.json` report beside the failed PDF in `inv-error`.
 - If the object does not exist in `inv-input`, there is nothing to copy; the parser returns an error and logs the missing key.
+
+Processing history:
+
+- `GET /api/jobs` returns recent parser jobs and counters.
+- `GET /api/jobs/{job_id}` returns one job.
+- `GET /objects/{job_id}/output` redirects to a temporary MinIO URL for successful XML output.
+- `GET /objects/{job_id}/error` redirects to the failed PDF copy when available.
+- `GET /objects/{job_id}/error-report` redirects to the JSON error report when available.
 
 ## NiFi Demo Flow
 

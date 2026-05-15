@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
 
@@ -15,6 +16,14 @@ class ObjectStore:
             access_key=settings.minio_access_key,
             secret_key=settings.minio_secret_key,
             secure=settings.minio_secure,
+            region=settings.minio_region,
+        )
+        self.public_client = Minio(
+            settings.minio_public_endpoint,
+            access_key=settings.minio_access_key,
+            secret_key=settings.minio_secret_key,
+            secure=settings.minio_public_secure,
+            region=settings.minio_region,
         )
 
     def download(self, bucket: str, object_key: str, destination: Path) -> Path:
@@ -50,3 +59,11 @@ class ObjectStore:
             length=len(content),
             content_type=content_type,
         )
+
+    def presigned_get_url(
+        self,
+        bucket: str,
+        object_key: str,
+        expires: timedelta = timedelta(hours=1),
+    ) -> str:
+        return self.public_client.presigned_get_object(bucket, object_key, expires=expires)

@@ -48,6 +48,7 @@ class InvoiceUploadEvent(BaseModel):
 
 
 class ParseResult(BaseModel):
+    job_id: str
     input_bucket: str
     input_object_key: str
     output_bucket: str

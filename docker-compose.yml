@@ -37,6 +37,9 @@ services:
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
       MINIO_SECURE: "false"
+      MINIO_REGION: us-east-1
+      MINIO_PUBLIC_ENDPOINT: localhost:9000
+      MINIO_PUBLIC_SECURE: "false"
       INPUT_BUCKET: inv-input
       OUTPUT_BUCKET: inv-output
       ERROR_BUCKET: inv-error

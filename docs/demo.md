@@ -11,6 +11,7 @@ Open:
 
 - NiFi: http://localhost:18080/nifi
 - MinIO: http://localhost:9001
+- Parser dashboard: http://localhost:8000
 - Parser health: http://localhost:8000/health
 
 Credentials:
@@ -51,6 +52,13 @@ In MinIO:
 - Input PDF appears in `inv-input`
 - Parsed XML appears in `inv-output`
 - Failed PDF copies and error reports appear in `inv-error`
+
+In the parser dashboard:
+
+- Successful and failed processing events appear in the history table
+- Duration is shown per file
+- Successful rows link to the output XML
+- Failed rows link to the failed PDF, error JSON, and full error log
 
 ## Direct Parser Test
 

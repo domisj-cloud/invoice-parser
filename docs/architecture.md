@@ -40,6 +40,27 @@ The input file is left in place even when parsing fails.
 - `minio`: S3-compatible object storage for the PoC
 - `parser-service`: FastAPI service that downloads PDFs from MinIO, parses them, and writes XML
 
+## Parser Dashboard
+
+The parser service exposes a lightweight dashboard at:
+
+```text
+http://localhost:8000
+```
+
+Processing metadata is stored in SQLite under the parser work directory, which is backed by the `parser-work` Docker volume in the PoC.
+
+The dashboard and `/api/jobs` expose:
+
+- input bucket and object key
+- started and completed timestamps
+- processing duration
+- status: `PROCESSING`, `SUCCESS`, `PARSE_ERROR`, or `ERROR`
+- invoice number, document type, and line count when parsing succeeds
+- output XML link when parsing succeeds
+- failed PDF and error report links when error archiving succeeds
+- captured error log when parsing fails
+
 ## Parser Scope
 
 The PoC parser is rule-based and targeted at the provided mock invoice families:
