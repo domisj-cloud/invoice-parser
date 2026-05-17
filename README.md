@@ -282,14 +282,6 @@ Factur-X are in **[docs/output-format.md](docs/output-format.md)**.
 
 ## Local Tests
 
-The tests use the sample PDFs and expected XML files from:
-
-```text
-/Users/domas/Downloads/invoice_pdf_examples
-```
-
-Run:
-
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
@@ -298,7 +290,10 @@ cd parser-service
 pytest -q
 ```
 
-Override the sample path if needed:
+A subset of tests (`test_sample_pdf_matches_expected_xml`) replays
+real PDF samples and compares against expected XML snapshots. Those
+tests are skipped by default; to run them, point `INVOICE_SAMPLE_DIR`
+at a directory containing matching `*.pdf` and `*.xml` pairs:
 
 ```bash
 INVOICE_SAMPLE_DIR=/path/to/invoice_pdf_examples pytest -q

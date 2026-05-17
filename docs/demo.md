@@ -1,58 +1,91 @@
 # Demo Guide
 
+This guide assumes the working directory is the repository root.
+
 ## Start the Stack
 
 ```bash
-cd "/Users/domas/Documents/New project"
 ./scripts/start_services.sh
 ```
 
-The script starts all Docker services in the background, rebuilds the parser image when needed, waits for the parser health endpoint, and prints the demo URLs.
+The script starts all Docker services in the background, rebuilds the
+parser image when needed, waits for the parser health endpoint, and
+prints the demo URLs.
 
 Open:
 
-- NiFi: http://localhost:18080/nifi
-- MinIO: http://localhost:9001
-- Parser dashboard: http://localhost:8000
-- Parser health: http://localhost:8000/health
+- NiFi: <http://localhost:18080/nifi>
+- MinIO: <http://localhost:9001>
+- Parser dashboard: <http://localhost:8000>
+- Parser health: <http://localhost:8000/health>
+- Local mailbox UI (Inbucket): <http://localhost:9090>
 
 Credentials:
 
 - NiFi: `admin` / `adminadminadmin`
 - MinIO: `minioadmin` / `minioadmin`
 
-## Create the NiFi Flow
+## Pick an Ingestion Path
 
-The flow can be provisioned automatically:
+Three NiFi process groups exist; pick whichever matches the demo
+scenario. They can coexist.
+
+### 1 — File drop (simplest)
 
 ```bash
 python3 scripts/create_nifi_flow.py
 ```
 
-This creates the `Invoice PDF Demo` process group and leaves all processors disabled.
-
-To run the flow:
-
-1. Open `Invoice PDF Demo` in NiFi.
-2. Enable the processors.
-3. Start the processors.
-4. Copy a PDF into `samples/inbox`.
-
-Example:
+Creates the `Invoice PDF Demo` process group (all processors disabled).
+In the NiFi UI, enable + start the group, then drop a PDF into
+`samples/inbox/`:
 
 ```bash
-cp "/Users/domas/Downloads/invoice_pdf_examples/invoice_multipage_many_lines.pdf" \
-   "/Users/domas/Documents/New project/samples/inbox/"
+cp path/to/any/invoice.pdf samples/inbox/
 ```
 
-NiFi reads the file from `/opt/nifi/inbox`, uploads it to `inv-input`, and calls the parser event endpoint.
+NiFi reads the file from `/opt/nifi/inbox` (mounted from
+`samples/inbox`), uploads it to `inv-input`, and calls the parser
+event endpoint.
+
+### 2 — Local mailbox (offline email demo)
+
+```bash
+python3 scripts/create_nifi_email_flow.py
+```
+
+Creates the `Invoice Email Demo` process group. Then send a test
+email with a PDF attachment to the local Inbucket SMTP server:
+
+```bash
+python3 scripts/send_test_email.py path/to/any/invoice.pdf
+# Defaults: To=invoices@inbucket.local, host=localhost:2500
+```
+
+Inbucket is catch-all, so any address with local-part `invoices` works.
+Browse arrivals at <http://localhost:9090/m/invoices>.
+
+### 3 — Hosted IMAPS (real internet hop)
+
+```bash
+export IMAPS_USER='your-poc-mailbox@outlook.com'   # or @icloud.com, @zohomail.eu, ...
+export IMAPS_PASSWORD='your-app-password'
+python3 scripts/create_nifi_imaps_flow.py
+```
+
+Creates `Invoice IMAPS Demo`. Send mail from any real account
+(Gmail, work mail, …) to the configured hosted mailbox; NiFi polls
+it via IMAPS every 30 seconds. Full provider setup, password
+rotation, and troubleshooting are in
+[email-ingestion.md](email-ingestion.md).
 
 ## Expected Result
 
 In MinIO:
 
 - Input PDF appears in `inv-input`
-- Parsed XML appears in `inv-output`
+- Parsed XML appears in `inv-output` (EN 16931-compliant UBL 2.1 —
+  see [output-format.md](output-format.md))
 - Failed PDF copies and error reports appear in `inv-error`
 
 In the parser dashboard:
@@ -62,14 +95,15 @@ In the parser dashboard:
 - Successful rows link to the output XML
 - Failed rows link to the failed PDF, error JSON, and full error log
 
-## Direct Parser Test
+## Direct Parser Test (no NiFi)
 
-Upload a PDF manually to MinIO bucket `inv-input`, then call:
+Upload a PDF manually to MinIO bucket `inv-input` via the console,
+then call:
 
 ```bash
 curl -X POST http://localhost:8000/events/invoice-uploaded \
   -H "Content-Type: application/json" \
-  -d '{"bucket":"inv-input","object_key":"invoice_multipage_many_lines.pdf"}'
+  -d '{"bucket":"inv-input","object_key":"your-invoice.pdf"}'
 ```
 
 Use the exact object name shown in MinIO.
@@ -80,4 +114,6 @@ Use the exact object name shown in MinIO.
 ./scripts/stop_services.sh
 ```
 
-This stops containers and removes the Docker network. Named volumes are preserved.
+This stops containers and removes the Docker network. Named volumes
+are preserved (MinIO data, parser job history, NiFi repositories,
+Inbucket is in-memory and is wiped).

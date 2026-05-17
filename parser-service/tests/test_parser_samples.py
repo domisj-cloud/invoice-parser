@@ -15,7 +15,10 @@ from app.xml_writer import invoice_to_xml
 SAMPLE_DIR = Path(
     os.environ.get(
         "INVOICE_SAMPLE_DIR",
-        "/Users/domas/Downloads/invoice_pdf_examples",
+        # No real default — tests below are skipped when this directory is
+        # absent. Set INVOICE_SAMPLE_DIR to a folder containing matching
+        # *.pdf and *.xml pairs to enable them.
+        "/nonexistent/invoice_pdf_examples",
     )
 )
 
@@ -54,8 +57,8 @@ def test_generic_invoice_layout_with_inline_labels_and_compact_table() -> None:
         548 Market Street
         support@example.com
         Bill to
-        domisj@gmail.com's Organization
-        domisj@gmail.com
+        john.doe@example.com's Organization
+        john.doe@example.com
         €21.78 due May 8, 2026
         Description Qty Unit price Tax Amount
         Claude Pro
@@ -74,7 +77,7 @@ def test_generic_invoice_layout_with_inline_labels_and_compact_table() -> None:
     assert invoice.due_date == "May 8, 2026"
     assert invoice.currency == "EUR"
     assert invoice.seller.name == "Anthropic, PBC"
-    assert invoice.buyer.name == "domisj@gmail.com's Organization"
+    assert invoice.buyer.name == "john.doe@example.com's Organization"
     assert invoice.lines[0].description == "Claude Pro - May 8-Jun 8, 2026"
     assert invoice.lines[0].vat_rate == 21
     assert invoice.totals.subtotal == 18
@@ -95,8 +98,8 @@ def test_generic_invoice_layout_with_inline_description_row_and_usd_prefix() -> 
         api-service@moonshot.ai
         SG GST 202326494K
         Bill to
-        Domas
-        domisj@gmail.com
+        Test Customer
+        john.doe@example.com
         US$10.00 due April 27, 2026
         Description Qty Unit price Amount
         Account Top-up 1 US$10.00 US$10.00
@@ -109,7 +112,7 @@ def test_generic_invoice_layout_with_inline_description_row_and_usd_prefix() -> 
     assert invoice.number == "NMQ6V9FT-0001"
     assert invoice.currency == "USD"
     assert invoice.seller.name == "MOONSHOT AI PTE. LTD."
-    assert invoice.buyer.name == "Domas"
+    assert invoice.buyer.name == "Test Customer"
     assert invoice.lines[0].description == "Account Top-up"
     assert invoice.lines[0].unit_price == 10
     assert invoice.lines[0].vat_rate == 0
@@ -125,7 +128,7 @@ def test_generic_receipt_with_colon_labels_and_no_line_table() -> None:
         Prepared on Behalf of your Test Sponsor: Google Cloud
         Date: 07 March 2023 VAT #: LT100005242513
         Company Name: Skandinaviska Enskilda Banken AB
-        Candidate Name: Domas Jautakis
+        Candidate Name: Test Candidate
         Exam Name: Google Cloud Certified - Professional Cloud Architect (English)
         Scheduled Date: 28 April 2023 1000H Europe/Vilnius
         Transaction Date: 06 March 2023
@@ -164,7 +167,7 @@ def test_dynamic_generic_invoice_with_bilingual_labels_and_no_table() -> None:
         PVM kodas / EU VAT no.: LT100013523217
         Adresas / Address: Saulėtekio al. 15, LT-10224 Vilnius
         Paslaugų gavėjas / Customer
-        Domas J
+        Test Customer
         Įkrovimo paslauga / Charging service
         Suteiktų paslaugų data / Date of service 2025-06-09
         Krovimo kiekis / Charging amount 7.366 kWh
@@ -178,7 +181,7 @@ def test_dynamic_generic_invoice_with_bilingual_labels_and_no_table() -> None:
     assert invoice.date == "2025-06-09"
     assert invoice.currency == "EUR"
     assert invoice.seller.name == "Stuart Energy, UAB"
-    assert invoice.buyer.name == "Domas J"
+    assert invoice.buyer.name == "Test Customer"
     assert invoice.lines[0].description == "Charging service"
     assert invoice.lines[0].vat_rate == 21
     assert invoice.lines[0].line_total == Decimal("1.83")
