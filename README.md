@@ -1,12 +1,19 @@
 # Invoice PDF Parser PoC
 
-Docker-based proof of concept for an event-driven invoice parsing flow:
+Docker-based proof of concept for an event-driven invoice parsing
+pipeline. The ultimate target is **OpenShift**, with invoices
+consumed from the company's **Microsoft 365 / Exchange Online**
+mailbox over IMAPS with OAuth2. See
+[docs/architecture.md](docs/architecture.md) for the full deployment
+target and migration table.
 
 ```text
-PDF invoice -> Apache NiFi -> MinIO inv-input -> parser event API -> MinIO inv-output XML
+email/file -> Apache NiFi -> MinIO inv-input -> parser event API -> MinIO inv-output XML (EN 16931 UBL 2.1)
 ```
 
-The mailbox part is intentionally skipped for this PoC. NiFi can ingest mock PDFs from the mounted `samples/inbox` directory.
+Three ingestion paths are wired up — file drop, local Inbucket
+(offline demo), and hosted IMAPS (real internet hop). Output is
+[EN 16931-compliant UBL 2.1 XML](docs/output-format.md).
 
 ## Services
 

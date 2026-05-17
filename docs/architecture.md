@@ -79,18 +79,49 @@ flowchart TB
   parser --> work
 ```
 
-Services:
+Services running inside the Docker Compose stack:
 
-- `nifi`: orchestrates ingestion (file drop, local mailbox, hosted IMAPS) and event calls.
-- `nifi-proxy`: local HTTP proxy for the NiFi UI, avoiding browser issues with NiFi's self-signed HTTPS certificate.
-- `minio`: S3-compatible object storage for the PoC.
-- `mailbox`: Inbucket dev mail server — SMTP listener for sending test mail in, POP3 for NiFi to pull, web UI for browsing. Catch-all (any address works).
-- `parser-service`: FastAPI service that downloads PDFs from MinIO, parses them, writes EN 16931 UBL 2.1 XML, and exposes the dashboard.
-- `parser-work`: Docker volume used for temporary parser work files and SQLite job history.
+| Container | Image | Host ports | Purpose |
+| --- | --- | --- | --- |
+| `nifi` | `apache/nifi:2.3.0` | `18443` (HTTPS) | Orchestrates ingestion (file drop, local mailbox, hosted IMAPS) and the parser event call. Holds the three process groups. |
+| `nifi-proxy` | `nginx:1.27-alpine` | `18080` (HTTP) | Local HTTP-to-HTTPS proxy in front of NiFi, so the UI is reachable on `http://localhost:18080/nifi` without browser warnings about NiFi's self-signed cert. |
+| `minio` | `minio:RELEASE.2025-04-22` | `9000` (S3 API), `9001` (console) | S3-compatible object storage for the three buckets (`inv-input`, `inv-output`, `inv-error`). |
+| `minio-init` | `minio/mc` | – (one-shot) | Creates the three buckets at startup, then exits. |
+| `mailbox` | `inbucket/inbucket:3.0.4` | `2500` (SMTP), `1100` (POP3), `9090` (web UI) | Local catch-all dev mail server — accepts any inbound SMTP, exposes POP3 for NiFi, browseable web UI. Used by the file-drop and local-email demo paths. |
+| `parser-service` | (built from `parser-service/`) | `8000` (API + dashboard) | FastAPI service that consumes invoice events, downloads PDFs from MinIO, parses them, writes EN 16931 UBL 2.1 XML, and exposes `/api/jobs` + dashboard. |
 
-Hosted mailboxes (Outlook, iCloud, Zoho, …) are accessed by NiFi over
-IMAPS to the public internet; they are not part of the Docker Compose
-stack.
+Docker volumes:
+
+| Volume | Mounted in | Holds |
+| --- | --- | --- |
+| `minio-data` | `minio` | Object storage (the three buckets) |
+| `parser-work` | `parser-service` | SQLite job history + transient parser working files |
+| `nifi-database`, `nifi-flowfile`, `nifi-content`, `nifi-provenance`, `nifi-state` | `nifi` | NiFi internal repositories; persist flow definitions and queued data across restarts |
+
+External (not in the Compose stack):
+
+- **Hosted mailboxes** (Outlook.com, iCloud, Yahoo, Zoho, Fastmail …)
+  reached by NiFi over the public internet via IMAPS. In the target
+  OpenShift deployment this becomes the **company's M365 / Exchange
+  Online mailbox** — see *Deployment Target: OpenShift* below.
+
+### Component disposition: dev-only vs. production-shaped
+
+Not every container in the PoC is meant to ship to OpenShift. The
+table below makes the intent explicit so the production move doesn't
+accidentally drag dev-only services with it.
+
+| Component | Disposition | Notes |
+| --- | --- | --- |
+| `parser-service` | **Ships to OpenShift** as-is | FastAPI app, stateless apart from the SQLite history (which moves to PostgreSQL in prod) |
+| `nifi` | **Ships to OpenShift** as-is | Single-node NiFi 2.x; could be replaced by a managed NiFi or scaled cluster later |
+| `minio` | **Ships to OpenShift** *or* replaced by AWS S3 / Azure Blob | The PoC uses MinIO for the S3 surface; ODF / cloud object storage are drop-in |
+| `nifi-proxy` | **Replaced** | OpenShift Routes / Ingress with proper TLS certs make the nginx hop unnecessary |
+| `mailbox` (Inbucket) | **Dropped** in prod | Dev catch-all only. Replaced by the company's real mailbox accessed via IMAPS (see ingestion table below). |
+| `minio-init` | **Replaced** | A one-shot Job / Helm hook creates buckets on first deploy |
+| `samples/inbox` (file drop) | **Dropped** in prod | Local demo affordance; production uses the email path |
+| `send_test_email.py` script | **Dev tooling only** | Used for offline / no-internet demos; never shipped |
+| `parser-work` volume (SQLite) | **Replaced** by PostgreSQL | Single-replica SQLite does not survive multi-replica scaling |
 
 ## Event Flow
 
@@ -247,30 +278,108 @@ The repo includes wrapper scripts for the Docker Compose stack:
 
 The start script runs `docker compose up -d --build`, waits for the parser health endpoint, and prints the local URLs and credentials. The stop script runs `docker compose down` and preserves named Docker volumes, including MinIO data, parser history, and NiFi repositories.
 
-## OpenShift Mapping
+## Deployment Target: OpenShift
 
-The PoC components map cleanly to the target deployment:
+The ultimate target is to run the full pipeline on OpenShift, consuming
+invoices from the company's internal **Microsoft 365 / Exchange Online
+mailbox**. The corporate mailbox is the only major component that
+stays *outside* the cluster — everything else moves in.
 
 ```mermaid
 flowchart LR
-  mailbox["Company mailbox\n(IMAPS, OAuth2 in prod)"] --> nifi["Apache NiFi\non OpenShift"]
-  nifi --> minioIn["MinIO / S3:\ninv-input"]
-  nifi --> route["Parser service route\n/events/invoice-uploaded"]
-  route --> pod["OpenShift parser Deployment"]
-  pod --> minioIn
-  pod --> minioOut["MinIO / S3: inv-output\n(EN 16931 UBL 2.1)"]
-  pod --> minioErr["MinIO / S3: inv-error"]
-  pod --> db["PostgreSQL\njob history"]
+  subgraph external["Outside OpenShift"]
+    sender["Suppliers / internal\nsenders (any email client)"]
+    m365["Microsoft 365 mailbox\ninvoices@company.com\n(Exchange Online)"]
+    sender -->|"SMTP (corporate MX)"| m365
+  end
+
+  subgraph ocp["OpenShift cluster"]
+    direction LR
+    nifi["NiFi Deployment\n(ConsumeIMAP + OAuth2)"]
+    minioIn["Object storage:\ninv-input"]
+    minioOut["Object storage:\ninv-output\n(EN 16931 UBL 2.1)"]
+    minioErr["Object storage:\ninv-error"]
+    parser["parser-service Deployment\n(FastAPI, N replicas)"]
+    db["PostgreSQL\njob history"]
+    parserRoute["OpenShift Route /\nService\n/events/invoice-uploaded"]
+
+    nifi --> minioIn
+    nifi --> parserRoute
+    parserRoute --> parser
+    parser --> minioIn
+    parser --> minioOut
+    parser --> minioErr
+    parser --> db
+  end
+
+  m365 -.->|"IMAPS over public/\ncorp network, OAuth2"| nifi
 ```
 
-Suggested production adjustments:
+### What moves to OpenShift and how
 
-- Run the parser as an OpenShift `Deployment` or `DeploymentConfig`.
-- Expose the parser event API internally to NiFi, not publicly unless required.
-- Keep MinIO/S3 as the object persistence boundary.
-- Move job history from SQLite to PostgreSQL once multiple parser replicas are needed.
-- Replace Inbucket / basic-auth IMAPS with the company mail server reached over **OAuth2**-authenticated IMAP (especially for Microsoft 365 / Exchange Online, which has disabled basic-auth IMAP). NiFi's `ConsumeIMAP` supports an OAuth2 token-provider controller service.
-- Add deduplication (by `Message-ID` or attachment SHA-256) in NiFi or the parser so forwarded chains don't produce duplicate parses.
-- Validate generated XML against the official EN 16931 Schematron rule set, routing non-conformant invoices to `inv-error` with a clear reason.
-- Add OCR for scanned PDFs (the current parser relies on pypdf's text extraction).
-- Add confidence fields and manual-review workflows for low-confidence extraction.
+| Component (PoC) | Target on OpenShift | Migration notes |
+| --- | --- | --- |
+| `parser-service` | `Deployment` + `Service` + `Route` | Run N replicas behind the Service. Stateless once SQLite is replaced. |
+| `nifi` | `StatefulSet` (single instance for PoC; cluster later) | NiFi repositories on a `PersistentVolumeClaim`. Sensitive properties decrypted using a `Secret` containing the NiFi key. |
+| `minio` | Either **MinIO Operator on OpenShift** *or* **AWS S3 / Azure Blob via the same S3 API** | Parser only knows the S3 surface, so the swap is configuration-only (`MINIO_ENDPOINT`, credentials). |
+| `parser-work` (SQLite) | **PostgreSQL** (CrunchyData / managed RDS) | SQLite is single-replica only. Schema is trivial — three tables. Connection string injected via env. |
+| Buckets | Provisioned by a `Job` / Helm hook | Same names: `inv-input`, `inv-output`, `inv-error`. |
+| Inbucket (`mailbox`) | **Removed** | Replaced by the M365 mailbox. No equivalent ships to prod. |
+| `samples/inbox` file drop | **Removed** | Email is the only ingestion path in prod. |
+| `nifi-proxy` | **Removed** | OpenShift Route handles TLS termination directly. |
+| Dev scripts (`send_test_email.py`, `create_nifi_*_flow.py`) | Stay in the repo as **CI / one-shot tooling** | Flow-creation scripts can be invoked from a post-deploy `Job` to provision the NiFi process group on a fresh NiFi instance. |
+
+### The mail side (M365 / Exchange Online specifics)
+
+Microsoft has **disabled basic-auth IMAP** on personal Outlook.com
+accounts and on virtually all M365 / Exchange Online tenants. Plain
+`IMAPS_USER` + `IMAPS_PASSWORD` (which is what the PoC's hosted IMAPS
+flow uses) **will not work** against the company mailbox.
+
+The production setup requires:
+
+1. **Azure AD / Microsoft Entra app registration** with the
+   `IMAP.AccessAsUser.All` delegated permission (or
+   `Mail.Read` application permission for a service-account flow).
+2. A **client ID + client secret** (and tenant ID), stored in OpenShift
+   `Secret`s.
+3. NiFi's `ConsumeIMAP` configured with
+   `authorization-mode = oauth2-based-authorization-mode` plus a
+   `StandardOauth2AccessTokenProvider` controller service that mints
+   tokens against
+   `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token`
+   with scope `https://outlook.office365.com/.default`.
+4. The mailbox itself (`invoices@company.com` or similar) must have
+   IMAP enabled at the tenant level — `Set-CASMailbox` PowerShell or
+   the M365 admin portal.
+
+The shape of the NiFi flow stays identical — `ConsumeIMAP →
+ExtractEmailAttachments → RouteOnAttribute → PutS3Object → ReplaceText
+→ InvokeHTTP` — only the authentication block on the source processor
+changes. The same is true for the OpenShift parser; it sees an event,
+not an email.
+
+### Additional production hardening
+
+- **Internal-only parser API.** Expose the parser `Route` only inside
+  the cluster (no `host:` for external traffic) — the only legitimate
+  client is NiFi.
+- **Schematron validation.** Add a post-serialization step that
+  validates each output document against the official EN 16931
+  Schematron rule set; route failures to `inv-error` with a structured
+  reason. See [output-format.md](output-format.md) for the known
+  semantic-conformance gaps.
+- **Deduplication.** A forwarded invoice can arrive twice. Dedupe by
+  `Message-ID` or by SHA-256 of the attachment in either NiFi
+  (`DetectDuplicate` processor) or in the parser before writing to
+  `inv-input`.
+- **OCR fallback.** The current parser relies on `pypdf` text
+  extraction. Scanned-image PDFs return empty text. Add an OCR pass
+  (Tesseract or a cloud OCR API) when extracted text is too short.
+- **Confidence + manual review.** For low-confidence extractions
+  (e.g. dynamic-parser fallback used, totals don't balance, key
+  fields blank), emit the XML to a separate `inv-review` bucket and
+  surface it in the dashboard with a "needs review" status.
+- **Secret management.** All credentials — MinIO/S3, Postgres, NiFi
+  sensitive-property key, Azure AD client secret — live in OpenShift
+  `Secret`s. Nothing in env files or the repo.
