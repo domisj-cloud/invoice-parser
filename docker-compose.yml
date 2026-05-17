@@ -84,6 +84,22 @@ services:
       nifi:
         condition: service_started
 
+  mailbox:
+    # Inbucket: lightweight catch-all SMTP + POP3 + Web UI mail server for dev/PoC.
+    # Any address (e.g. invoices@inbucket.local) is accepted; mail lands in a
+    # mailbox named after the local-part of the To: address.
+    image: inbucket/inbucket:3.0.4
+    environment:
+      INBUCKET_SMTP_ADDR: ":2500"
+      INBUCKET_POP3_ADDR: ":1100"
+      INBUCKET_WEB_ADDR: ":9000"
+      INBUCKET_STORAGE_TYPE: memory
+      INBUCKET_STORAGE_MAILBOXMSGCAP: "200"
+    ports:
+      - "2500:2500"   # SMTP — send mail in
+      - "1100:1100"   # POP3 — NiFi polls this
+      - "9090:9000"   # Web UI (browse received emails)
+
 volumes:
   minio-data:
   parser-work:

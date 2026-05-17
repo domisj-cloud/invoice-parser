@@ -17,6 +17,9 @@ The mailbox part is intentionally skipped for this PoC. NiFi can ingest mock PDF
 | Parser dashboard | http://localhost:8000 | Processing history, status, object links, and error logs |
 | Parser API | http://localhost:8000/health | FastAPI health endpoint |
 | NiFi | http://localhost:18080/nifi | Login `admin` / `adminadminadmin`; proxied to NiFi's internal HTTPS |
+| Mailbox (Inbucket) UI | http://localhost:9090 | Catch-all dev mail server; browse received emails per mailbox |
+| Mailbox SMTP | `localhost:2500` | Send PDF invoices in (e.g. via `scripts/send_test_email.py`) |
+| Mailbox POP3 | `localhost:1100` | NiFi polls this; mailbox `invoices`, any password |
 
 MinIO buckets are created automatically:
 
@@ -54,6 +57,7 @@ More detailed operational docs:
 
 - [Demo guide](docs/demo.md)
 - [Architecture](docs/architecture.md)
+- [Email ingestion](docs/email-ingestion.md)
 
 ## Parser Event Contract
 
@@ -147,6 +151,74 @@ The flow contains these processors:
    - Content-Type: `application/json`
 
 To demo, copy a sample PDF into `samples/inbox/`, start the NiFi processors, and check MinIO `inv-output` for the XML.
+
+## Email Ingestion Flow (Inbucket)
+
+The stack also includes **Inbucket**, a catch-all dev mail server, so the full
+"email-with-PDF -> parser" path can be demoed locally without a real mail
+provider. Inbucket accepts any address and any POP3 password.
+
+| Endpoint | URL / port | Purpose |
+| --- | --- | --- |
+| Web UI | http://localhost:9090 | Browse received emails per mailbox |
+| SMTP | `localhost:2500` | Send mail in |
+| POP3 | `localhost:1100` | NiFi `ConsumePOP3` polls this |
+
+Create the email-ingestion NiFi process group (separate from the file-based
+one, so both can coexist):
+
+```bash
+python3 scripts/create_nifi_email_flow.py
+```
+
+This creates an `Invoice Email Demo` process group with this pipeline (all
+processors are left DISABLED for review):
+
+```
+ConsumePOP3 -> ExtractEmailAttachments -> RouteOnAttribute (pdf only)
+    -> UpdateAttribute (s3.object.key) -> PutS3Object (inv-input)
+    -> ReplaceText -> InvokeHTTP (parser-service)
+```
+
+POP3 config baked into the flow: host `mailbox`, port `1100`, user
+`invoices`, any password.
+
+Send a test email with a PDF attachment from your laptop:
+
+```bash
+python3 scripts/send_test_email.py samples/inbox/some-invoice.pdf
+# Defaults: To=invoices@inbucket.local, host=localhost:2500
+```
+
+Then start the processors in NiFi. Inbucket's UI at
+http://localhost:9090/m/invoices shows what arrived; MinIO `inv-output`
+shows the resulting XML.
+
+### Real Gmail -> Outlook -> NiFi (hosted IMAPS)
+
+To run the full internet-hop scenario (send from your real Gmail and
+have NiFi pick it up), point NiFi at a hosted IMAPS mailbox you
+control (Outlook.com is the easiest choice):
+
+```bash
+export IMAPS_USER='invoice-parser-poc@outlook.com'
+export IMAPS_PASSWORD='your-app-password'
+python3 scripts/create_nifi_imaps_flow.py
+```
+
+This creates a separate `Invoice IMAPS Demo` process group with all
+processors disabled. The password is stored as a NiFi sensitive
+property. Full details and provider settings (iCloud, Yahoo, Zoho,
+Fastmail, ...) are in [docs/email-ingestion.md](docs/email-ingestion.md).
+
+### Why not deliver real Gmail to the local server?
+
+Gmail delivers via your domain's public MX record on port 25, which a
+laptop on a residential ISP can't host. For this PoC the recommended
+pattern is to send test emails locally (script above). If real
+internet-to-local delivery is required later, add a Cloudflare Tunnel or
+an inbound email forwarding service (ImprovMX, ForwardEmail.net) in
+front of Inbucket.
 
 ## Direct Parser Test Without NiFi
 
