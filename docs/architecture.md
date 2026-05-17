@@ -148,6 +148,23 @@ GET /objects/{job_id}/error-report
 GET /objects/{job_id}/input
 ```
 
+## Output Format
+
+The parser emits **EN 16931-compliant UBL 2.1 XML** — the European
+standard for electronic invoicing. The serializer lives in
+`app/serializers/en16931_ubl.py`; the public entry point
+`app.xml_writer.invoice_to_xml(invoice)` delegates to it.
+
+Commercial invoices and receipts use the `<Invoice>` root with type
+code `380`; credit notes use the `<CreditNote>` root with type code
+`381`. Every monetary amount is quantized to 2 decimal places and
+carries the `currencyID` attribute. Dates are normalized to ISO 8601.
+Tax is broken down per-rate via `cac:TaxSubtotal` elements.
+
+Full mapping (BT/BG codes -> UBL elements), code-list choices, and
+limitations of the PoC implementation are documented separately in
+[output-format.md](output-format.md).
+
 ## Parser Strategy
 
 The parser uses known sample parsers first, then falls back to dynamic best-effort extraction for any readable PDF text with monetary amounts.

@@ -58,6 +58,7 @@ More detailed operational docs:
 - [Demo guide](docs/demo.md)
 - [Architecture](docs/architecture.md)
 - [Email ingestion](docs/email-ingestion.md)
+- [Output format (EN 16931 / UBL 2.1)](docs/output-format.md)
 
 ## Parser Event Contract
 
@@ -230,41 +231,54 @@ curl -X POST http://localhost:8000/events/invoice-uploaded \
   -d '{"bucket":"inv-input","object_key":"invoice_multipage_many_lines.pdf"}'
 ```
 
-## XML Shape
+## XML Output Format
 
-The PoC writes a simple XML schema:
+The parser writes **EN 16931-compliant UBL 2.1** XML — the European
+standard for electronic invoicing. Documents declare conformance via
+`<cbc:CustomizationID>urn:cen.eu:en16931:2017</cbc:CustomizationID>`
+and use the official UBL 2.1 Invoice / CreditNote schema.
+
+Example output:
 
 ```xml
-<Invoice>
-  <type>invoice</type>
-  <number>INV-2026-0001</number>
-  <date>2026-05-01</date>
-  <due_date>2026-05-15</due_date>
-  <currency>EUR</currency>
-  <Seller>
-    <name>Blue River Software LTD</name>
-    <vat>LT100000000</vat>
-  </Seller>
-  <Buyer>
-    <name>Greenfield Retail UAB</name>
-    <vat>LT200000000</vat>
-  </Buyer>
-  <Lines>
-    <Line>
-      <description>Monthly SaaS subscription - Pro plan</description>
-      <quantity>3</quantity>
-      <unit_price>49.0</unit_price>
-      <vat_rate>21</vat_rate>
-      <line_total>147.0</line_total>
-    </Line>
-  </Lines>
-  <Totals>
-    <subtotal>647.0</subtotal>
-    <tax>135.87</tax>
-    <total>782.87</total>
-  </Totals>
+<?xml version='1.0' encoding='utf-8'?>
+<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
+         xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+         xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+  <cbc:CustomizationID>urn:cen.eu:en16931:2017</cbc:CustomizationID>
+  <cbc:ID>INV-2026-0001</cbc:ID>
+  <cbc:IssueDate>2026-05-01</cbc:IssueDate>
+  <cbc:DueDate>2026-05-15</cbc:DueDate>
+  <cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>
+  <cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>
+  <cac:AccountingSupplierParty>
+    <cac:Party>
+      <cac:PartyName><cbc:Name>Blue River Software LTD</cbc:Name></cac:PartyName>
+      <cac:PartyTaxScheme>
+        <cbc:CompanyID>LT100000000</cbc:CompanyID>
+        <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
+      </cac:PartyTaxScheme>
+      <cac:PartyLegalEntity>
+        <cbc:RegistrationName>Blue River Software LTD</cbc:RegistrationName>
+      </cac:PartyLegalEntity>
+    </cac:Party>
+  </cac:AccountingSupplierParty>
+  <!-- AccountingCustomerParty, TaxTotal, LegalMonetaryTotal, InvoiceLine ... -->
 </Invoice>
 ```
+
+Credit notes use the `<CreditNote>` root with `CreditNoteTypeCode 381`
+and `CreditNoteLine` / `CreditedQuantity` instead of the invoice
+equivalents.
+
+Why EN 16931: mandatory for B2G across the EU, rolling out for B2B in
+France (2026), Germany (2027), Belgium, Poland; foundation for PEPPOL
+BIS Billing 3.0, xRechnung, and most EU national profiles.
+
+Full field mapping (BT/BG codes → UBL elements), code-list choices
+(tax category, unit of measure), decimal rules, date normalization,
+known limitations, and notes on pivoting to PEPPOL / xRechnung /
+Factur-X are in **[docs/output-format.md](docs/output-format.md)**.
 
 ## Local Tests
 
