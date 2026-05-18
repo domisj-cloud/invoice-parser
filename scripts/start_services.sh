@@ -27,6 +27,23 @@ fi
 echo
 docker compose ps
 
+# Auto-enable every NiFi process group's processors so saved flows
+# (e.g. Invoice IMAPS Demo) resume polling without manual clicks.
+# Uses the project venv if it exists, otherwise the system python3.
+PYTHON_BIN="${REPO_ROOT}/.venv/bin/python"
+if [ ! -x "${PYTHON_BIN}" ]; then
+  PYTHON_BIN="$(command -v python3 || true)"
+fi
+
+if [ -n "${PYTHON_BIN}" ] && [ -x "${PYTHON_BIN}" ]; then
+  echo
+  echo "Auto-enabling NiFi flows ..."
+  "${PYTHON_BIN}" "${SCRIPT_DIR}/enable_all_nifi_flows.py" || \
+    echo "(enable_all_nifi_flows.py reported issues; flows may need manual attention)"
+else
+  echo "No python3 available; skipping auto-enable. Run scripts/enable_all_nifi_flows.py manually."
+fi
+
 cat <<'EOF'
 
 Services are available at:
@@ -34,6 +51,7 @@ Services are available at:
   Parser health:    http://localhost:8000/health
   MinIO console:    http://localhost:9001
   NiFi:             http://localhost:18080/nifi/
+  Mailbox UI:       http://localhost:9090
 
 Credentials:
   MinIO: minioadmin / minioadmin
