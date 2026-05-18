@@ -62,6 +62,10 @@ services:
     ports:
       - "18443:8443"
     volumes:
+      # NiFi 2.x stores the flow definition in conf/flow.json.gz. Without
+      # persisting `conf/`, every `docker compose down` wipes process groups,
+      # controller services, and IMAPS credentials.
+      - nifi-conf:/opt/nifi/nifi-current/conf
       - nifi-state:/opt/nifi/nifi-current/state
       - nifi-database:/opt/nifi/nifi-current/database_repository
       - nifi-flowfile:/opt/nifi/nifi-current/flowfile_repository
@@ -103,6 +107,7 @@ services:
 volumes:
   minio-data:
   parser-work:
+  nifi-conf:
   nifi-state:
   nifi-database:
   nifi-flowfile:
